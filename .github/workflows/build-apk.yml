@@ -26,11 +26,11 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
-      - name: Install Android SDK 35
+      - name: Install Android SDK packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -45,8 +45,7 @@ jobs:
           WRAPPER=$(find android-src -type f -name gradlew -print -quit)
 
           if [ -z "$WRAPPER" ]; then
-            echo "ERROR: Gradle wrapper not found in ZIP file."
-            echo "The Android project must include gradlew."
+            echo "ERROR: gradlew not found"
             exit 1
           fi
 
