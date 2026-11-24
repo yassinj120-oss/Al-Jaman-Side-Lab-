@@ -4,45 +4,65 @@ name: Build Al-Juman Lab APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Extract Android project
         run: |
-          unzip -q Al-Juman-Android-Build-Ready.zip -d /tmp/aljuman
-          cp -a /tmp/aljuman/AlJumanAndroid/. .
+          mkdir -p android-src
+          unzip -q Al-Juman-Android-Build-Ready.zip -d android-src
 
-      - 
-          from pathlib import Path
-          p = Path("app/build.gradle")
-          s = p.read_text()
-          old = "JavaVersion.VERSION_1_8"
-          if old not in s:
-              raise SystemExit("Java 1.8 setting not found")
-          s = s.replace(old, "JavaVersion.VERSION_17")
-          p.write_text(s)
-          print("Java target updated to 17")
-          PY
+      - name: Locate Android project
+        run: |
+          WRAPPER=$(find android-src -type f -name gradlew -print -quit)
 
+          if [ -z "$WRAPPER" ]; then
+            echo "ERROR: Gradle wrapper not found in ZIP file."
+            echo "The Android project must include gradlew."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$WRAPPER")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          chmod +x "$WRAPPER"
 
       - name: Build APK
-        run: gradle --no-daemon assembleDebug
+        run: |
+          cd "$PROJECT_DIR"
+          ./gradlew --no-daemon assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: Al-Juman-Lab-APK.
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Al-Juman-Lab-APK
+          path: android-src/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
