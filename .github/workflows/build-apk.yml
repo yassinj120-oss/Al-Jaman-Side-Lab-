@@ -26,9 +26,7 @@ jobs:
           unzip -q Al-Juman-Android-Build-Ready.zip -d /tmp/aljuman
           cp -a /tmp/aljuman/AlJumanAndroid/. .
 
-      - name: Fix Java target compatibility
-        run: |
-          python3 - <<'PY'
+      - 
           from pathlib import Path
           p = Path("app/build.gradle")
           s = p.read_text()
