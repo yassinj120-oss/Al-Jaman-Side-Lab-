@@ -1,3 +1,4 @@
+
 name: Build Al-Juman Lab APK
 
 on:
@@ -14,9 +15,10 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
-      # 1. Download repository
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -35,76 +37,118 @@ jobs:
 
       # 4. Setup Android SDK
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      # 5. Locate or extract Android project
+      # 5. Find or extract Android project
       - name: Locate Android project
         shell: bash
         run: |
           python3 <<'PY'
           import os
           import zipfile
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
 
           root = Path.cwd()
 
           def find_projects():
               found = []
+
               for current, dirs, files in os.walk(root):
                   dirs[:] = [
                       d for d in dirs
-                      if d not in ('.git', '.gradle', 'build')
+                      if d not in (
+                          '.git',
+                          '.gradle',
+                          'build'
+                      )
                   ]
+
                   p = Path(current)
-                  if ('settings.gradle' in files or
-                      'settings.gradle.kts' in files):
-                      if ((p / 'app' / 'build.gradle').exists() or
-                          (p / 'app' / 'build.gradle.kts').exists()):
-                          found.append(p)
-              return found
+
+                  has_settings = (
+                      'settings.gradle' in files or
+                      'settings.gradle.kts' in files
+                  )
+
+                  has_app = (
+                      (p / 'app' / 'build.gradle').is_file() or
+                      (p / 'app' / 'build.gradle.kts').is_file()
+                  )
+
+                  if has_settings and has_app:
+                      found.append(p)
+
+              return sorted(
+                  found,
+                  key=lambda p: (
+                      len(p.parts),
+                      str(p)
+                  )
+              )
 
           projects = find_projects()
 
           if not projects:
-              zips = list(root.glob('*.zip'))
+              zips = sorted(root.glob('*.zip'))
+
               if not zips:
                   raise SystemExit(
-                      'ERROR: No Android project or ZIP archive found.'
+                      'ERROR: No Android project or ZIP found.'
                   )
 
               archive = next(
-                  (z for z in zips if 'Build-Ready' in z.name),
+                  (
+                      z for z in zips
+                      if 'Build-Ready' in z.name
+                  ),
                   zips[0]
               )
 
               target = root / '_ci_source'
               target.mkdir(exist_ok=True)
 
+              print('Extracting:', archive.name)
+
               with zipfile.ZipFile(archive) as z:
                   for item in z.infolist():
-                      name = Path(item.filename)
-                      if name.is_absolute() or '..' in name.parts:
+                      name = PurePosixPath(item.filename)
+
+                      if (
+                          name.is_absolute()
+                          or '..' in name.parts
+                          or '\\' in item.filename
+                      ):
                           continue
+
                       z.extract(item, target)
 
               projects = find_projects()
 
           if not projects:
               raise SystemExit(
-                  'ERROR: Android project with app module not found.'
+                  'ERROR: Android app module not found.'
               )
 
-          project = projects[0]
-          print('Android project:', project)
-          Path(os.environ['GITHUB_ENV']).write_text(
-              f'PROJECT_DIR={project}\n'
-          )
+          project = projects[0].resolve()
+
+          print('Selected Android project:', project)
+
+          with open(
+              os.environ['GITHUB_ENV'],
+              'a',
+              encoding='utf-8'
+          ) as env:
+              env.write(f'PROJECT_DIR={project}\n')
           PY
 
-      # 6. Install required Android platform
+      # 6. Install required Android SDK platform
       - name: Install Android SDK platform
         shell: bash
         run: |
+          set -euo pipefail
+
           COMPILE_SDK=$(python3 - "$PROJECT_DIR" <<'PY'
           import re
           import sys
@@ -113,23 +157,19 @@ jobs:
           root = Path(sys.argv[1])
           values = []
 
-          for file in root.rglob('*.gradle'):
-              if 'build' in file.parts:
-                  continue
-              text = file.read_text(errors='ignore')
-              matches = re.findall(
-                  r'compileSdk(?:Version)?\s*[=(]?\s*(\d+)',
-                  text
-              )
-              values.extend(int(x) for x in matches)
+          for pattern in ('build.gradle', 'build.gradle.kts'):
+              for file in root.rglob(pattern):
+                  if 'build' in file.parts:
+                      continue
 
-          for file in root.rglob('*.gradle.kts'):
-              text = file.read_text(errors='ignore')
-              matches = re.findall(
-                  r'compileSdk(?:Version)?\s*[=(]?\s*(\d+)',
-                  text
-              )
-              values.extend(int(x) for x in matches)
+                  text = file.read_text(errors='ignore')
+
+                  matches = re.findall(
+                      r'compileSdk(?:Version)?\s*[=(]?\s*(\d+)',
+                      text
+                  )
+
+                  values.extend(int(x) for x in matches)
 
           print(max(values) if values else 35)
           PY
@@ -137,33 +177,47 @@ jobs:
 
           echo "Installing Android API $COMPILE_SDK"
 
-          yes | sdkmanager --licenses
-
-          sdkmanager \
+          sdkmanager --install \
             "platform-tools" \
             "platforms;android-${COMPILE_SDK}"
 
-      # 7. Fix Java and Kotlin target compatibility
+      # 7. Fix Java and Kotlin JVM compatibility
       - name: Fix Java and Kotlin compatibility
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/java17.init.gradle" <<'GRADLE'
           gradle.projectsEvaluated {
-              allprojects {
-                  tasks.withType(
+              allprojects { project ->
+
+                  def androidExtension =
+                      project.extensions.findByName("android")
+
+                  if (androidExtension != null) {
+                      androidExtension.compileOptions.sourceCompatibility =
+                          JavaVersion.VERSION_17
+
+                      androidExtension.compileOptions.targetCompatibility =
+                          JavaVersion.VERSION_17
+                  }
+
+                  project.tasks.withType(
                       org.gradle.api.tasks.compile.JavaCompile
                   ).configureEach {
                       sourceCompatibility = '17'
                       targetCompatibility = '17'
                   }
 
-                  tasks.configureEach { task ->
-                      if (task.class.name.contains('KotlinCompile')) {
+                  project.tasks.configureEach { task ->
+                      if (
+                          task.class.name.contains('KotlinCompile')
+                      ) {
                           try {
-                              task.kotlinOptions.jvmTarget = '17'
+                              if (task.hasProperty('kotlinOptions')) {
+                                  task.kotlinOptions.jvmTarget = '17'
+                              }
                           } catch (Exception ignored) {
                               println(
-                                  "Kotlin target configuration skipped"
+                                  "Kotlin JVM target handled by project configuration"
                               )
                           }
                       }
@@ -172,14 +226,17 @@ jobs:
           }
           GRADLE
 
-      # 8. Build APK
+      # 8. Build Debug APK
       - name: Build Debug APK
         shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_DIR"
 
           if [ -f gradlew ]; then
             chmod +x gradlew
+
             ./gradlew \
               --no-daemon \
               --stacktrace \
@@ -197,19 +254,25 @@ jobs:
       - name: Verify APK
         shell: bash
         run: |
+          set -euo pipefail
+
           APK=$(find "$PROJECT_DIR" \
             -type f \
             -path '*/build/outputs/apk/debug/*.apk' \
+            | sort \
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK file was not generated."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK successfully generated: $APK"
           mkdir -p "$RUNNER_TEMP/final-apk"
-          cp "$APK" "$RUNNER_TEMP/final-apk/Al-Juman-Lab.apk"
+
+          cp "$APK" \
+            "$RUNNER_TEMP/final-apk/Al-Juman-Lab.apk"
+
+          echo "APK verified successfully."
 
       # 10. Upload APK
       - name: Upload APK
