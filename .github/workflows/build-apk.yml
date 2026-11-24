@@ -26,6 +26,34 @@ jobs:
           unzip -q Al-Juman-Android-Build-Ready.zip -d /tmp/aljuman
           cp -a /tmp/aljuman/AlJumanAndroid/. .
 
+      - name: Fix Java target compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/build.gradle")
+          s = p.read_text()
+          old = "JavaVersion.VERSION_1_8"
+          if old not in s:
+              raise SystemExit("Java 1.8 setting not found")
+          s = s.replace(old, "JavaVersion.VERSION_17")
+          p.write_text(s)
+          print("Java target updated to 17")
+          PY
+concurrency: 
+      - name: Fix Java target compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/build.gradle")
+          s = p.read_text()
+          old = "JavaVersion.VERSION_1_8"
+          if old not in s:
+              raise SystemExit("Java 1.8 setting not found")
+          s = s.replace(old, "JavaVersion.VERSION_17")
+          p.write_text(s)
+          print("Java target updated to 17")
+          PY
+
       - name: Build APK
         run: gradle --no-daemon assembleDebug
 
