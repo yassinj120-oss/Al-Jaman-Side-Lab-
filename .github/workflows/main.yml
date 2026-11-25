@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Al-Juman Android APK
 
 on:
   workflow_dispatch:
@@ -26,29 +26,95 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Configure Android SDK
-        run: |
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
-          echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Locate Android Project
+      - name: Prepare Android Project
         shell: bash
         run: |
-          if [ -f "gradlew" ]; then
-            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
-          elif [ -f "android/gradlew" ]; then
-            echo "PROJECT_DIR=android" >> "$GITHUB_ENV"
+          set -e
+
+          echo "Checking repository files..."
+          ls -la
+
+          mkdir -p build-project
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f \
+            -iname "*Build-Ready*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE=$(find . -maxdepth 2 -type f \
+              -iname "*.zip" | head -n 1)
+          fi
+
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found Android project archive: $ZIP_FILE"
+            unzip -q "$ZIP_FILE" -d build-project
           else
-            echo "ERROR: Gradle wrapper not found"
+            echo "No ZIP archive found. Using repository files."
+            cp -R . build-project/
+          fi
+
+          echo "Searching for Android project..."
+          PROJECT_ROOT=$(find build-project -type f \
+            \( -name "settings.gradle" -o \
+               -name "settings.gradle.kts" \) \
+            -print -quit | xargs dirname)
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            PROJECT_ROOT=$(find . -type f \
+              \( -name "settings.gradle" -o \
+                 -name "settings.gradle.kts" \) \
+              -print -quit | xargs dirname)
+          fi
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: Android Gradle project was not found."
+            echo "Available files:"
+            find . -maxdepth 5 -type f | head -100
             exit 1
           fi
 
-      - name: Make Gradle Wrapper Executable
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+          echo "Android project found:"
+          echo "$PROJECT_ROOT"
+
+          ls -la "$PROJECT_ROOT"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Packages
+        shell: bash
         run: |
-          chmod +x gradlew 2>/dev/null || true
-          chmod +x android/gradlew 2>/dev/null || true
+          set -e
+
+          sdkmanager --licenses || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Prepare Gradle Wrapper
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_ROOT"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "Gradle wrapper found."
+          else
+            echo "Gradle wrapper missing."
+            echo "Generating Gradle wrapper..."
+
+            gradle wrapper --gradle-version 8.9
+
+            chmod +x ./gradlew
+          fi
 
       - name: Fix Java and Kotlin JVM Target
         shell: bash
@@ -63,10 +129,10 @@ jobs:
                   options.release = 17
               }
 
-              tasks.configureEach {
-                  if (hasProperty("kotlinOptions")) {
+              tasks.configureEach { task ->
+                  if (task.hasProperty("kotlinOptions")) {
                       try {
-                          kotlinOptions.jvmTarget = "17"
+                          task.kotlinOptions.jvmTarget = "17"
                       } catch (Exception ignored) {
                       }
                   }
@@ -78,26 +144,38 @@ jobs:
         shell: bash
         run: |
           set -e
-          cd "$PROJECT_DIR"
-          ./gradlew --no-daemon --stacktrace \
-            -I "$RUNNER_TEMP/jvm17.init.gradle" \
+
+          cd "$PROJECT_ROOT"
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            --init-script "$RUNNER_TEMP/jvm17.init.gradle" \
             assembleDebug
 
       - name: Verify APK
         shell: bash
         run: |
-          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$APK" ]; then
-            echo "APK file not found!"
+          set -e
+
+          APK_FILE=$(find "$PROJECT_ROOT" -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print -quit)
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: APK was not created."
             exit 1
           fi
+
           echo "APK successfully created:"
-          ls -lh "$APK"
+          ls -lh "$APK_FILE"
+
+          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Al-Juman-Lab-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_FILE }}
           if-no-files-found: error
           retention-days: 14
