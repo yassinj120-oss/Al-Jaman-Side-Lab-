@@ -27,32 +27,30 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Platform
+      - name: Configure Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
 
       - name: Locate Android Project
         shell: bash
         run: |
-          if [ ! -f "gradlew" ] && [ -f "android/gradlew" ]; then
-            echo "PROJECT_DIR=android" >> "$GITHUB_ENV"
-          elif [ -f "gradlew" ]; then
+          if [ -f "gradlew" ]; then
             echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          elif [ -f "android/gradlew" ]; then
+            echo "PROJECT_DIR=android" >> "$GITHUB_ENV"
           else
-            echo "ERROR: gradlew not found"
+            echo "ERROR: Gradle wrapper not found"
             exit 1
           fi
 
       - name: Make Gradle Wrapper Executable
         run: |
-          if [ -f gradlew ]; then chmod +x gradlew; fi
-          if [ -f android/gradlew ]; then chmod +x android/gradlew; fi
+          chmod +x gradlew 2>/dev/null || true
+          chmod +x android/gradlew 2>/dev/null || true
 
-      - name: Fix Java and Kotlin JVM Target Compatibility
+      - name: Fix Java and Kotlin JVM Target
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/jvm17.init.gradle" <<'GRADLE'
@@ -65,17 +63,11 @@ jobs:
                   options.release = 17
               }
 
-              tasks.configureEach { task ->
-                  if (task.class.name.toLowerCase().contains('kotlin')) {
+              tasks.configureEach {
+                  if (hasProperty("kotlinOptions")) {
                       try {
-                          task.kotlinOptions.jvmTarget = '17'
+                          kotlinOptions.jvmTarget = "17"
                       } catch (Exception ignored) {
-                          try {
-                              task.compilerOptions.jvmTarget.set(
-                                  org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
-                              )
-                          } catch (Exception ignored2) {
-                          }
                       }
                   }
               }
@@ -95,14 +87,17 @@ jobs:
         shell: bash
         run: |
           APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "APK file not found!"
+            exit 1
+          fi
           echo "APK successfully created:"
           ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Al-Juman-Lab-debug-APK
+          name: Al-Juman-Lab-APK
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
