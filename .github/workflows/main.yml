@@ -29,49 +29,73 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Prepare Android Project
+      - name: Extract Android Build Ready Project
         shell: bash
         run: |
           set -e
 
-          mkdir -p build-project
+          ZIP_FILE=$(find . -type f \
+            -iname "*Build-Ready*.zip" \
+            -print -quit)
 
-          ZIP_FILE=$(find . -maxdepth 3 -type f \
-            -iname "*.zip" | head -n 1)
-
-          if [ -n "$ZIP_FILE" ]; then
-            echo "Extracting project ZIP..."
-            unzip -q "$ZIP_FILE" -d build-project
-          else
-            echo "Using repository files..."
-            cp -R . build-project/
-          fi
-
-          PROJECT_ROOT=$(find build-project -type f \
-            \( -name "settings.gradle" -o \
-               -name "settings.gradle.kts" \) \
-            -print -quit | xargs -r dirname)
-
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "Searching repository for Android project..."
-            PROJECT_ROOT=$(find . -type f \
-              \( -name "settings.gradle" -o \
-                 -name "settings.gradle.kts" \) \
-              -print -quit | xargs -r dirname)
-          fi
-
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERROR: Android project not found."
-            find . -maxdepth 4 -type f
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Build-Ready ZIP file not found."
+            echo "Repository files:"
+            find . -maxdepth 3 -type f
             exit 1
           fi
 
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "Found archive:"
+          echo "$ZIP_FILE"
 
-          echo "Project located at:"
+          mkdir -p "$RUNNER_TEMP/android-project"
+
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/android-project"
+
+          echo "Extracted files:"
+          find "$RUNNER_TEMP/android-project" -maxdepth 5 -type f
+
+      - name: Locate Android Gradle Project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_ROOT=""
+
+          while IFS= read -r SETTINGS_FILE; do
+            CANDIDATE=$(dirname "$SETTINGS_FILE")
+
+            if [ -f "$CANDIDATE/app/build.gradle" ] || \
+               [ -f "$CANDIDATE/app/build.gradle.kts" ]; then
+
+              PROJECT_ROOT="$CANDIDATE"
+              break
+            fi
+
+          done < <(
+            find "$RUNNER_TEMP/android-project" \
+              -type f \
+              \( -name "settings.gradle" -o \
+                 -name "settings.gradle.kts" \)
+          )
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: Android app module not found."
+            echo "Expected settings.gradle and app/build.gradle."
+            find "$RUNNER_TEMP/android-project" -maxdepth 6 -type f
+            exit 1
+          fi
+
+          echo "ANDROID_PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+          echo "Android project located:"
           echo "$PROJECT_ROOT"
 
+          ls -la "$PROJECT_ROOT"
+          ls -la "$PROJECT_ROOT/app"
+
       - name: Configure Android SDK
+        shell: bash
         run: |
           echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
@@ -85,7 +109,9 @@ jobs:
 
           if [ ! -f "$SDKMANAGER" ]; then
             SDKMANAGER=$(find /usr/local/lib/android/sdk \
-              -type f -name sdkmanager -print -quit)
+              -type f \
+              -name sdkmanager \
+              -print -quit)
           fi
 
           if [ -z "$SDKMANAGER" ]; then
@@ -105,7 +131,7 @@ jobs:
         run: |
           set -e
 
-          cd "$PROJECT_ROOT"
+          cd "$ANDROID_PROJECT_ROOT"
 
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
@@ -114,7 +140,7 @@ jobs:
             chmod +x ./gradlew
           fi
 
-      - name: Fix Java and Kotlin JVM Target
+      - name: Configure Java and Kotlin JVM 17
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/jvm17.init.gradle" <<'GRADLE'
@@ -137,12 +163,24 @@ jobs:
           }
           GRADLE
 
+      - name: Check Android Build Tasks
+        shell: bash
+        run: |
+          set -e
+
+          cd "$ANDROID_PROJECT_ROOT"
+
+          ./gradlew \
+            --no-daemon \
+            --init-script "$RUNNER_TEMP/jvm17.init.gradle" \
+            tasks --all
+
       - name: Build Debug APK
         shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_ROOT"
+          cd "$ANDROID_PROJECT_ROOT"
 
           ./gradlew \
             --no-daemon \
@@ -155,16 +193,17 @@ jobs:
         run: |
           set -e
 
-          APK_FILE=$(find "$PROJECT_ROOT" -type f \
+          APK_FILE=$(find "$ANDROID_PROJECT_ROOT" \
+            -type f \
             -path "*/build/outputs/apk/debug/*.apk" \
             -print -quit)
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK not found."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK successfully created:"
+          echo "APK created successfully:"
           ls -lh "$APK_FILE"
 
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
