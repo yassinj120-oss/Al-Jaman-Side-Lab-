@@ -169,6 +169,61 @@ jobs:
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-${COMPILE_SDK}"
+            
+      # 8. Fix Java and Kotlin JVM compatibility
+      - name: Fix Java and Kotlin compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$PROJECT_DIR"
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle_file = Path("app/build.gradle")
+          if not gradle_file.exists():
+              gradle_file = Path("app/build.gradle.kts")
+
+          if not gradle_file.exists():
+              raise SystemExit("Android Gradle file not found")
+
+          text = gradle_file.read_text()
+
+          java_config = """
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          """
+
+          kotlin_config = """
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          """
+
+          if "compileOptions" not in text:
+              text = re.sub(
+                  r'android\\s*\\{',
+                  lambda m: m.group(0) + "\\n" + java_config,
+                  text,
+                  count=1
+              )
+
+          if "kotlinOptions" not in text:
+              text = re.sub(
+                  r'android\\s*\\{',
+                  lambda m: m.group(0) + "\\n" + kotlin_config,
+                  text,
+                  count=1
+              )
+
+          gradle_file.write_text(text)
+          print("Java and Kotlin configured to JVM 17")
+          PY
+
 
       
       # 8. Build Debug APK
