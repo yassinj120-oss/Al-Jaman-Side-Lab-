@@ -36,56 +36,47 @@ jobs:
 
           mkdir -p build-project
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
-            -iname "*Build-Ready*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            ZIP_FILE=$(find . -maxdepth 2 -type f \
-              -iname "*.zip" | head -n 1)
-          fi
+          ZIP_FILE=$(find . -maxdepth 3 -type f \
+            -iname "*.zip" | head -n 1)
 
           if [ -n "$ZIP_FILE" ]; then
-            echo "Extracting Android project: $ZIP_FILE"
+            echo "Extracting project ZIP..."
             unzip -q "$ZIP_FILE" -d build-project
           else
-            echo "No ZIP archive found."
+            echo "Using repository files..."
             cp -R . build-project/
           fi
 
           PROJECT_ROOT=$(find build-project -type f \
             \( -name "settings.gradle" -o \
                -name "settings.gradle.kts" \) \
-            -print -quit | xargs dirname)
+            -print -quit | xargs -r dirname)
 
           if [ -z "$PROJECT_ROOT" ]; then
+            echo "Searching repository for Android project..."
             PROJECT_ROOT=$(find . -type f \
               \( -name "settings.gradle" -o \
                  -name "settings.gradle.kts" \) \
-              -print -quit | xargs dirname)
+              -print -quit | xargs -r dirname)
           fi
 
           if [ -z "$PROJECT_ROOT" ]; then
             echo "ERROR: Android project not found."
-            find . -maxdepth 5 -type f | head -100
+            find . -maxdepth 4 -type f
             exit 1
           fi
 
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-          echo "Android project found:"
+          echo "Project located at:"
           echo "$PROJECT_ROOT"
 
-          ls -la "$PROJECT_ROOT"
-
       - name: Configure Android SDK
-        shell: bash
         run: |
           echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
-          echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
-      - name: Install Required Android SDK Packages
+      - name: Install Android SDK Packages
         shell: bash
         run: |
           set -e
@@ -97,15 +88,12 @@ jobs:
               -type f -name sdkmanager -print -quit)
           fi
 
-          if [ -z "$SDKMANAGER" ] || [ ! -f "$SDKMANAGER" ]; then
+          if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found."
             exit 1
           fi
 
-          echo "Using sdkmanager:"
-          echo "$SDKMANAGER"
-
-          "$SDKMANAGER" --licenses || true
+          yes | "$SDKMANAGER" --licenses || true
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -121,10 +109,7 @@ jobs:
 
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            echo "Gradle wrapper found."
           else
-            echo "Gradle wrapper missing."
-            echo "Generating Gradle wrapper..."
             gradle wrapper --gradle-version 8.9
             chmod +x ./gradlew
           fi
@@ -137,9 +122,8 @@ jobs:
 
           allprojects {
               tasks.withType(JavaCompile).configureEach {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-                  options.release = 17
+                  sourceCompatibility = "17"
+                  targetCompatibility = "17"
               }
 
               tasks.configureEach { task ->
@@ -176,7 +160,7 @@ jobs:
             -print -quit)
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not created."
+            echo "ERROR: APK not found."
             exit 1
           fi
 
